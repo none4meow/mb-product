@@ -1,0 +1,78 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;700;800&display=swap');
+
+:root {
+  --page: #f3eadc;
+  --page-ink: #20150d;
+  --panel: #fcf7ef;
+  --edge: rgba(72, 50, 31, 0.14);
+  --text-strong: #2e1f13;
+  --muted-strong: #76543a;
+  --muted: #6e5a48;
+  --panel-shadow:
+    0 32px 70px rgba(77, 52, 27, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  --display: 'Fraunces', Georgia, serif;
+  --sans: 'Plus Jakarta Sans', 'Segoe UI', sans-serif;
+  --mono: 'IBM Plex Mono', 'Consolas', monospace;
+
+  color: var(--page-ink);
+  background:
+    radial-gradient(circle at top left, rgba(229, 180, 121, 0.32), transparent 34%),
+    radial-gradient(circle at top right, rgba(138, 73, 36, 0.16), transparent 26%),
+    linear-gradient(180deg, #f7f0e4 0%, var(--page) 55%, #ece0cf 100%);
+  font-family: var(--sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  color: var(--page-ink);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+code {
+  padding: 0.2rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(104, 70, 39, 0.08);
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-size: 0.92rem;
+}
+
+h1,
+h2 {
+  font-family: var(--display);
+  color: var(--text-strong);
+}
+
+p {
+  line-height: 1.6;
+}
+
+#root {
+  min-height: 100vh;
+}
