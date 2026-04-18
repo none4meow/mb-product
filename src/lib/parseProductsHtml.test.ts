@@ -1,40 +1,103 @@
-import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import seedProducts from '../data/products.initial.json'
+import type { Product } from '../types/catalog'
 import { UNASSIGNED_LABEL, parseProductsHtml } from './parseProductsHtml'
 
-const downloadFixturePaths = [1, 2, 3, 4].map((pageNumber) =>
-  join(homedir(), 'Downloads', `Products_Page ${pageNumber}.html`),
-)
+const seedCatalog = seedProducts as Product[]
+const PRODUCTS_PER_EXPORT = Math.ceil(seedCatalog.length / 4)
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+}
+
+function toFixtureImagePath(imageUrl: string) {
+  return imageUrl.startsWith('https://minhbros.com')
+    ? imageUrl.replace('https://minhbros.com', '')
+    : imageUrl
+}
+
+function renderProductRow(product: Product, index: number) {
+  const imagePath = escapeHtml(toFixtureImagePath(product.imageUrl))
+
+  return `
+    <tr>
+      <td><a data-toggle="collapse" data-target="#product_${index + 1}"></a></td>
+      <td>
+        <a href="${imagePath}"><img src="${imagePath}"></a>
+      </td>
+      <td style="vertical-align: middle;">${escapeHtml(product.name)}</td>
+      <td style="vertical-align: middle;">${escapeHtml(product.sku)}</td>
+      <td style="vertical-align: middle;">${escapeHtml(product.type)}</td>
+      <td style="vertical-align: middle;">${escapeHtml(product.hsName)}</td>
+      <td style="vertical-align: middle;">${escapeHtml(product.hsCode)}</td>
+      <td style="vertical-align: middle;">${escapeHtml(product.category)}</td>
+      <td></td>
+      <td class="text-center"><a href="/edit-product/${index + 1}">Edit</a></td>
+    </tr>
+  `
+}
+
+function renderProductTable(products: Product[], offset: number) {
+  return `
+    <table>
+      ${products.map((product, index) => renderProductRow(product, offset + index)).join('\n')}
+    </table>
+  `
+}
 
 async function loadProvidedExports() {
-  const pages: string[] = await Promise.all(
-    downloadFixturePaths.map((filePath) => readFile(filePath, 'utf8')),
+  const pages = Array.from({ length: 4 }, (_, pageIndex) =>
+    renderProductTable(
+      seedCatalog.slice(
+        pageIndex * PRODUCTS_PER_EXPORT,
+        (pageIndex + 1) * PRODUCTS_PER_EXPORT,
+      ),
+      pageIndex * PRODUCTS_PER_EXPORT,
+    ),
   )
 
-  return pages.flatMap((pageHtml: string, index: number) =>
+  return pages.flatMap((pageHtml, index) =>
     parseProductsHtml(pageHtml, `Products_Page ${index + 1}.html`),
   )
 }
 
 describe('parseProductsHtml', () => {
-  it('parses the four provided exports into 1573 unique products', async () => {
+  it('parses the generated exports into 1573 unique products', async () => {
     const products = await loadProvidedExports()
 
     expect(products).toHaveLength(1573)
-    expect(new Set(products.map((product: { sku: string }) => product.sku)).size).toBe(1573)
+    expect(new Set(products.map((product) => product.sku)).size).toBe(1573)
   })
 
-  it('keeps Vietnamese text intact and builds absolute image URLs', async () => {
-    const [firstPageHtml] = await Promise.all([readFile(downloadFixturePaths[0], 'utf8')])
-    const products = parseProductsHtml(firstPageHtml, 'Products_Page 1.html')
+  it('keeps Vietnamese text intact and builds absolute image URLs', () => {
+    const fixtureHtml = `
+      <table>
+        <tr>
+          <td><a data-toggle="collapse" data-target="#product_1"></a></td>
+          <td>
+            <a href="/upload/product/mock/import-1.jpg"><img src="/upload/product/mock/import-1.jpg"></a>
+          </td>
+          <td style="vertical-align: middle;">Tranh mảnh ghép 2 tầng D48</td>
+          <td style="vertical-align: middle;">D48</td>
+          <td style="vertical-align: middle;">Wood</td>
+          <td style="vertical-align: middle;">Plywood decorative sign</td>
+          <td style="vertical-align: middle;">4411939090</td>
+          <td style="vertical-align: middle;">Table Decor</td>
+          <td></td>
+          <td class="text-center"><a href="/edit-product/1">Edit</a></td>
+        </tr>
+      </table>
+    `
+    const products = parseProductsHtml(fixtureHtml, 'Products_Page 1.html')
 
     expect(products[0]).toMatchObject({
       name: 'Tranh mảnh ghép 2 tầng D48',
       sku: 'D48',
-      imageUrl:
-        'https://minhbros.com/upload/product/1654/9d2682367c3935defcb1f9e247a97c0d69d86c3e469c7.jpg',
+      imageUrl: 'https://minhbros.com/upload/product/mock/import-1.jpg',
     })
   })
 
