@@ -97,6 +97,10 @@ async function expandCatalogInfo(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole('button', { name: /show catalog summary and actions/i }))
 }
 
+async function openLocalSource(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole('button', { name: /show local source/i }))
+}
+
 describe('App', () => {
   beforeEach(() => {
     setWindowScrollY(0)
@@ -123,7 +127,7 @@ describe('App', () => {
     expect(screen.getByText('Active catalog')).toBeInTheDocument()
   })
 
-  it('shows the dev-only source panel, removes the old toolbar actions, and keeps file upload plus pasted HTML inputs', async () => {
+  it('keeps Local Source collapsed by default and reveals the source inputs only after expanding it', async () => {
     const user = userEvent.setup()
 
     render(<App />)
@@ -132,6 +136,19 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Update Catalog' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Reset to Seed Data' })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Catalog source editor' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /show local source/i })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(screen.queryByLabelText('Paste HTML')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Upload HTML Files')).not.toBeInTheDocument()
+
+    await openLocalSource(user)
+
+    expect(screen.getByRole('button', { name: /hide local source/i })).toHaveAttribute(
+      'aria-expanded',
+      'true',
+    )
     expect(screen.getByLabelText('Paste HTML')).toBeInTheDocument()
     expect(screen.getByLabelText('Upload HTML Files')).toBeInTheDocument()
   })
@@ -231,6 +248,7 @@ describe('App', () => {
 
     render(<App catalogApi={catalogApi} />)
 
+    await openLocalSource(user)
     await user.type(screen.getByLabelText('Paste HTML'), '<table>preview</table>')
     await user.upload(
       screen.getByLabelText('Upload HTML Files'),
@@ -292,6 +310,7 @@ describe('App', () => {
 
     render(<App catalogApi={catalogApi} />)
 
+    await openLocalSource(user)
     await user.type(screen.getByLabelText('Paste HTML'), '<table>preview</table>')
     await user.click(screen.getByRole('button', { name: 'Preview Import' }))
     await screen.findByText('NEW-02')
@@ -309,6 +328,51 @@ describe('App', () => {
     expect(await screen.findByText('Fresh product')).toBeInTheDocument()
     expect(screen.getByText('Tranh manh ghep 2 tang D48')).toBeInTheDocument()
     expect(screen.queryByText('Overwritten D48')).not.toBeInTheDocument()
+  })
+
+  it('preserves Local Source draft inputs and duplicate selections when the panel is collapsed and reopened', async () => {
+    const user = userEvent.setup()
+    const previewResponse: ImportPreviewResponse = {
+      newProducts: [],
+      duplicateCandidates: [
+        {
+          sku: seedProducts[0].sku,
+          existing: seedProducts[0],
+          incoming: {
+            ...seedProducts[0],
+            name: 'Updated imported D48',
+            sourceLabel: 'Upload.html',
+          },
+        },
+      ],
+      invalidSources: [],
+    }
+    const catalogApi = createCatalogApiMock({
+      previewImport: async () => previewResponse,
+    })
+
+    render(<App catalogApi={catalogApi} />)
+
+    await openLocalSource(user)
+    await user.type(screen.getByLabelText('Paste HTML'), '<table>persist</table>')
+    await user.upload(
+      screen.getByLabelText('Upload HTML Files'),
+      new File(['<html>persist</html>'], 'Persist.html', { type: 'text/html' }),
+    )
+    await user.click(screen.getByRole('button', { name: 'Preview Import' }))
+    await screen.findByRole('checkbox', { name: /overwrite d48/i })
+    await user.click(screen.getByRole('checkbox', { name: /overwrite d48/i }))
+
+    await user.click(screen.getByRole('button', { name: /hide local source/i }))
+
+    expect(screen.queryByLabelText('Paste HTML')).not.toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /overwrite d48/i })).not.toBeInTheDocument()
+
+    await openLocalSource(user)
+
+    expect(screen.getByLabelText('Paste HTML')).toHaveValue('<table>persist</table>')
+    expect(screen.getByText('1 file selected')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /overwrite d48/i })).toBeChecked()
   })
 
   it('opens the row editor, shows image thumbnails beside each URL, and saves the edited product back into the table', async () => {
@@ -331,6 +395,7 @@ describe('App', () => {
 
     render(<App catalogApi={catalogApi} />)
 
+    await openLocalSource(user)
     await user.click(screen.getByRole('button', { name: 'Edit product D48' }))
 
     expect(await screen.findByRole('dialog', { name: /edit tranh manh ghep 2 tang d48/i })).toBeInTheDocument()

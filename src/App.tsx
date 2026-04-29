@@ -777,6 +777,7 @@ function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
   const [isCatalogInfoExpanded, setIsCatalogInfoExpanded] = useState(false)
+  const [isLocalSourceExpanded, setIsLocalSourceExpanded] = useState(false)
   const [isAdvancedSearchExpanded, setIsAdvancedSearchExpanded] = useState(false)
   const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
   const [selectedImageIndex, setSelectedImageIndex] = useState(0)
@@ -1195,133 +1196,155 @@ function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
 
       {editableCatalog ? (
         <section aria-label="Catalog source editor" className="source-panel">
-          <div className="source-panel__header">
-            <div>
-              <p className="eyebrow">Local Source</p>
-              <h2>Preview catalog changes before writing them.</h2>
+          <button
+            aria-controls="local-source-panel"
+            aria-expanded={isLocalSourceExpanded}
+            className="disclosure-toggle source-panel__toggle"
+            type="button"
+            onClick={() => setIsLocalSourceExpanded((currentValue) => !currentValue)}
+          >
+            <span className="disclosure-toggle__copy">
+              <span className="disclosure-toggle__eyebrow">Local Source</span>
+              <span className="disclosure-toggle__title">
+                {isLocalSourceExpanded ? 'Hide Local Source' : 'Show Local Source'}
+              </span>
+            </span>
+            <span className="disclosure-toggle__state" aria-hidden="true">
+              {isLocalSourceExpanded ? '-' : '+'}
+            </span>
+          </button>
+
+          {isLocalSourceExpanded ? (
+            <div id="local-source-panel" className="source-panel__content">
+              <div className="source-panel__header">
+                <div>
+                  <p className="eyebrow">Local Source</p>
+                  <h2>Preview catalog changes before writing them.</h2>
+                </div>
+                <p className="source-panel__hint">
+                  Local dev only. Paste exported HTML or upload saved HTML files, then review new and
+                  duplicate SKUs before updating {SOURCE_FILE_LABEL}.
+                </p>
+              </div>
+
+              <div className="source-panel__grid">
+                <label className="filter-field source-panel__field">
+                  <span>Paste HTML</span>
+                  <textarea
+                    aria-label="Paste HTML"
+                    className="source-panel__textarea"
+                    placeholder="Paste exported HTML here"
+                    value={pastedHtml}
+                    onChange={(event) => {
+                      setPastedHtml(event.target.value)
+                      resetImportPreview()
+                    }}
+                  />
+                </label>
+
+                <label className="filter-field source-panel__field">
+                  <span>Upload HTML Files</span>
+                  <input
+                    ref={importFileInputRef}
+                    accept=".html,text/html"
+                    aria-label="Upload HTML Files"
+                    className="source-panel__file-input"
+                    multiple
+                    type="file"
+                    onChange={handleSelectedImportFiles}
+                  />
+                  <small>
+                    {selectedImportFiles.length > 0
+                      ? `${selectedImportFiles.length} file${selectedImportFiles.length === 1 ? '' : 's'} selected`
+                      : 'Optional: combine uploaded HTML files with the pasted HTML preview.'}
+                  </small>
+                </label>
+              </div>
+
+              <div className="source-panel__actions">
+                <button
+                  className="button button--primary"
+                  disabled={isBusy}
+                  type="button"
+                  onClick={handlePreviewImport}
+                >
+                  Preview Import
+                </button>
+                <button
+                  className="button button--ghost"
+                  disabled={
+                    isBusy ||
+                    !importPreview ||
+                    (importPreview.newProducts.length === 0 && selectedDuplicateSkus.length === 0)
+                  }
+                  type="button"
+                  onClick={handleApplyImport}
+                >
+                  Apply to Source
+                </button>
+              </div>
+
+              {importPreview ? (
+                <section aria-label="Import preview results" className="source-preview">
+                  <article className="source-preview__card">
+                    <h3>New SKUs</h3>
+                    {importPreview.newProducts.length > 0 ? (
+                      <ul className="source-preview__list">
+                        {importPreview.newProducts.map((product) => (
+                          <li key={product.sku}>
+                            <strong>{product.sku}</strong>
+                            <span>{product.name}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="source-preview__empty">No new SKUs in this preview.</p>
+                    )}
+                  </article>
+
+                  <article className="source-preview__card">
+                    <h3>Duplicate SKUs</h3>
+                    {importPreview.duplicateCandidates.length > 0 ? (
+                      <ul className="source-preview__list source-preview__list--duplicates">
+                        {importPreview.duplicateCandidates.map((candidate) => (
+                          <li key={candidate.sku} className="duplicate-card">
+                            <label className="duplicate-card__toggle">
+                              <input
+                                checked={selectedDuplicateSkuSet.has(candidate.sku)}
+                                type="checkbox"
+                                onChange={() => toggleDuplicateSkuSelection(candidate.sku)}
+                              />
+                              <span>Overwrite {candidate.sku}</span>
+                            </label>
+                            <p>
+                              <strong>Existing:</strong> {candidate.existing.name}
+                            </p>
+                            <p>
+                              <strong>Incoming:</strong> {candidate.incoming.name}
+                            </p>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="source-preview__empty">No duplicate SKUs need review.</p>
+                    )}
+                  </article>
+
+                  <article className="source-preview__card">
+                    <h3>Invalid Sources</h3>
+                    {importPreview.invalidSources.length > 0 ? (
+                      <ul className="source-preview__list">
+                        {importPreview.invalidSources.map((sourceName) => (
+                          <li key={sourceName}>{sourceName}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="source-preview__empty">Every provided source produced product rows.</p>
+                    )}
+                  </article>
+                </section>
+              ) : null}
             </div>
-            <p className="source-panel__hint">
-              Local dev only. Paste exported HTML or upload saved HTML files, then review new and
-              duplicate SKUs before updating {SOURCE_FILE_LABEL}.
-            </p>
-          </div>
-
-          <div className="source-panel__grid">
-            <label className="filter-field source-panel__field">
-              <span>Paste HTML</span>
-              <textarea
-                aria-label="Paste HTML"
-                className="source-panel__textarea"
-                placeholder="Paste exported HTML here"
-                value={pastedHtml}
-                onChange={(event) => {
-                  setPastedHtml(event.target.value)
-                  resetImportPreview()
-                }}
-              />
-            </label>
-
-            <label className="filter-field source-panel__field">
-              <span>Upload HTML Files</span>
-              <input
-                ref={importFileInputRef}
-                accept=".html,text/html"
-                aria-label="Upload HTML Files"
-                className="source-panel__file-input"
-                multiple
-                type="file"
-                onChange={handleSelectedImportFiles}
-              />
-              <small>
-                {selectedImportFiles.length > 0
-                  ? `${selectedImportFiles.length} file${selectedImportFiles.length === 1 ? '' : 's'} selected`
-                  : 'Optional: combine uploaded HTML files with the pasted HTML preview.'}
-              </small>
-            </label>
-          </div>
-
-          <div className="source-panel__actions">
-            <button
-              className="button button--primary"
-              disabled={isBusy}
-              type="button"
-              onClick={handlePreviewImport}
-            >
-              Preview Import
-            </button>
-            <button
-              className="button button--ghost"
-              disabled={
-                isBusy ||
-                !importPreview ||
-                (importPreview.newProducts.length === 0 && selectedDuplicateSkus.length === 0)
-              }
-              type="button"
-              onClick={handleApplyImport}
-            >
-              Apply to Source
-            </button>
-          </div>
-
-          {importPreview ? (
-            <section aria-label="Import preview results" className="source-preview">
-              <article className="source-preview__card">
-                <h3>New SKUs</h3>
-                {importPreview.newProducts.length > 0 ? (
-                  <ul className="source-preview__list">
-                    {importPreview.newProducts.map((product) => (
-                      <li key={product.sku}>
-                        <strong>{product.sku}</strong>
-                        <span>{product.name}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="source-preview__empty">No new SKUs in this preview.</p>
-                )}
-              </article>
-
-              <article className="source-preview__card">
-                <h3>Duplicate SKUs</h3>
-                {importPreview.duplicateCandidates.length > 0 ? (
-                  <ul className="source-preview__list source-preview__list--duplicates">
-                    {importPreview.duplicateCandidates.map((candidate) => (
-                      <li key={candidate.sku} className="duplicate-card">
-                        <label className="duplicate-card__toggle">
-                          <input
-                            checked={selectedDuplicateSkuSet.has(candidate.sku)}
-                            type="checkbox"
-                            onChange={() => toggleDuplicateSkuSelection(candidate.sku)}
-                          />
-                          <span>Overwrite {candidate.sku}</span>
-                        </label>
-                        <p>
-                          <strong>Existing:</strong> {candidate.existing.name}
-                        </p>
-                        <p>
-                          <strong>Incoming:</strong> {candidate.incoming.name}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="source-preview__empty">No duplicate SKUs need review.</p>
-                )}
-              </article>
-
-              <article className="source-preview__card">
-                <h3>Invalid Sources</h3>
-                {importPreview.invalidSources.length > 0 ? (
-                  <ul className="source-preview__list">
-                    {importPreview.invalidSources.map((sourceName) => (
-                      <li key={sourceName}>{sourceName}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="source-preview__empty">Every provided source produced product rows.</p>
-                )}
-              </article>
-            </section>
           ) : null}
         </section>
       ) : null}
@@ -1334,7 +1357,9 @@ function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
           </div>
 
           <div className="filters-panel__header-actions">
-            
+            <button className="button button--ghost" type="button" onClick={clearFilters}>
+              Clear Filters
+            </button>
             <p className="filters-panel__hint">
               Text filters use substring matching. Facets use exact matches and combine together
               with AND logic.
@@ -1363,10 +1388,6 @@ function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
           >
             {isAdvancedSearchExpanded ? 'Hide Advanced Search' : 'Show Advanced Search'}
           </button>
-
-          <button className="button button--ghost" type="button" onClick={clearFilters}>
-              Clear Filters
-            </button>
         </div>
 
         {isAdvancedSearchExpanded ? (

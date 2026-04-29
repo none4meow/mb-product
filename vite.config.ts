@@ -16,6 +16,8 @@ import {
   updateProductInSource,
 } from './dev/catalogSource'
 
+const isSelfDestroyingPwa = process.env.PWA_SELF_DESTROYING === 'true'
+
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown) {
   response.statusCode = statusCode
   response.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -100,6 +102,7 @@ export default defineConfig({
     VitePWA({
       injectRegister: false,
       registerType: 'autoUpdate',
+      selfDestroying: isSelfDestroyingPwa,
       includeAssets: ['favicon.svg', 'icons.svg'],
       manifest: {
         name: 'Minh Bros Product Catalog',
