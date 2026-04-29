@@ -13,18 +13,22 @@ import {
 } from 'react'
 import initialProducts from './data/products.initial.json'
 import './App.css'
-import {
-  UNASSIGNED_LABEL,
-  dedupeProductsBySku,
-  parseProductsHtml,
-} from './lib/parseProductsHtml'
+import { UNASSIGNED_LABEL } from './lib/parseProductsHtml'
 import type { FilterState, Product } from './types/catalog'
+import type {
+  ApplyImportRequest,
+  CatalogResponse,
+  ImportPreviewRequest,
+  ImportPreviewResponse,
+  UpdateCatalogProductRequest,
+  UpdateCatalogProductResponse,
+} from './types/catalogSourceApi'
 
-const SEED_FILE_COUNT = 4
-const FACET_SIZE = 6
 const FALLBACK_IMAGE_URL = 'https://minhbros.com/upload/product/placeholder.jpg'
 const GALLERY_SWIPE_THRESHOLD_PX = 48
 const SCROLL_TOP_VISIBILITY_THRESHOLD_PX = 300
+const SOURCE_FILE_LABEL = 'src/data/products.initial.json'
+const FACET_SIZE = 6
 
 const INITIAL_FILTERS: FilterState = {
   nameQuery: '',
@@ -45,11 +49,34 @@ type CatalogSummary = {
 
 type FacetKey = 'types' | 'hsNames' | 'categories'
 
+type CatalogApiClient = {
+  previewImport: (request: ImportPreviewRequest) => Promise<ImportPreviewResponse>
+  applyImport: (request: ApplyImportRequest) => Promise<CatalogResponse>
+  updateProduct: (request: UpdateCatalogProductRequest) => Promise<UpdateCatalogProductResponse>
+}
+
+type AppProps = {
+  isEditableCatalog?: boolean
+  catalogApi?: CatalogApiClient
+}
+
 type ImageGalleryProps = {
   product: Product
   selectedImageIndex: number
   onClose: () => void
   onSelectImage: Dispatch<SetStateAction<number>>
+}
+
+type ProductEditorSession = {
+  originalSku: string
+  product: Product
+}
+
+type ProductEditorModalProps = {
+  session: ProductEditorSession
+  isSaving: boolean
+  onClose: () => void
+  onSave: (originalSku: string, product: Product) => void
 }
 
 type SwipeGesture = {
@@ -59,13 +86,6 @@ type SwipeGesture = {
   hasTriggered: boolean
   pointerId?: number
   touchId?: number
-}
-
-const SEED_SUMMARY: CatalogSummary = {
-  label: 'Bundled seed snapshot',
-  fileCount: SEED_FILE_COUNT,
-  productCount: seedProducts.length,
-  invalidFiles: [],
 }
 
 function normalizeQuery(value: string) {
@@ -88,14 +108,6 @@ function collectFacetValues(products: Product[], key: 'type' | 'hsName' | 'categ
 
 function readSelectedValues(event: ChangeEvent<HTMLSelectElement>) {
   return Array.from(event.target.selectedOptions, (option) => option.value)
-}
-
-function buildImportMessage(summary: CatalogSummary) {
-  if (!summary.invalidFiles.length) {
-    return `Imported ${summary.productCount} products from ${summary.fileCount} file${summary.fileCount === 1 ? '' : 's'}.`
-  }
-
-  return `Imported ${summary.productCount} products from ${summary.fileCount} file${summary.fileCount === 1 ? '' : 's'} and skipped ${summary.invalidFiles.length} invalid file${summary.invalidFiles.length === 1 ? '' : 's'}.`
 }
 
 function clearAdvancedOnlyFilters(filters: FilterState): FilterState {
@@ -132,6 +144,109 @@ function getTouchByIdentifier(
   }
 
   return null
+}
+
+function cloneProduct(product: Product): Product {
+  return {
+    ...product,
+    imageUrls: [...product.imageUrls],
+  }
+}
+
+function createEditorDraft(product: Product): Product {
+  const draft = cloneProduct(product)
+  return {
+    ...draft,
+    imageUrls: draft.imageUrls.length > 0 ? draft.imageUrls : [''],
+  }
+}
+
+function buildCatalogSummary(products: Product[], isEditableCatalog: boolean): CatalogSummary {
+  return {
+    label: `${isEditableCatalog ? 'Source of truth' : 'Published snapshot'} · ${SOURCE_FILE_LABEL}`,
+    fileCount: 1,
+    productCount: products.length,
+    invalidFiles: [],
+  }
+}
+
+function buildPreviewMessage(preview: ImportPreviewResponse) {
+  const messageParts: string[] = []
+
+  if (preview.newProducts.length > 0) {
+    messageParts.push(
+      `${preview.newProducts.length} new SKU${preview.newProducts.length === 1 ? '' : 's'}`,
+    )
+  }
+
+  if (preview.duplicateCandidates.length > 0) {
+    messageParts.push(
+      `${preview.duplicateCandidates.length} duplicate SKU${preview.duplicateCandidates.length === 1 ? '' : 's'}`,
+    )
+  }
+
+  if (messageParts.length === 0) {
+    return 'Preview loaded. No new or duplicate SKUs were found.'
+  }
+
+  return `Preview loaded with ${messageParts.join(' and ')}.`
+}
+
+function buildApplyMessage(newProductCount: number, duplicateUpdateCount: number) {
+  const messageParts: string[] = []
+
+  if (newProductCount > 0) {
+    messageParts.push(
+      `${newProductCount} new SKU${newProductCount === 1 ? '' : 's'} added`,
+    )
+  }
+
+  if (duplicateUpdateCount > 0) {
+    messageParts.push(
+      `${duplicateUpdateCount} duplicate SKU${duplicateUpdateCount === 1 ? '' : 's'} overwritten`,
+    )
+  }
+
+  return `Updated ${SOURCE_FILE_LABEL}: ${messageParts.join(' and ')}.`
+}
+
+async function requestJson<T>(url: string, init?: RequestInit) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  })
+  const responseText = await response.text()
+  const responseBody = responseText ? (JSON.parse(responseText) as { message?: string }) : {}
+
+  if (!response.ok) {
+    throw new Error(responseBody.message ?? 'The catalog request failed.')
+  }
+
+  return responseBody as T
+}
+
+const defaultCatalogApi: CatalogApiClient = {
+  previewImport(request) {
+    return requestJson<ImportPreviewResponse>('/api/dev/catalog/import-preview', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  },
+  applyImport(request) {
+    return requestJson<CatalogResponse>('/api/dev/catalog/apply-import', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    })
+  },
+  updateProduct(request) {
+    return requestJson<UpdateCatalogProductResponse>('/api/dev/catalog/product', {
+      method: 'PUT',
+      body: JSON.stringify(request),
+    })
+  },
 }
 
 function StatCard({
@@ -185,6 +300,198 @@ function FacetField({
       </select>
       <small>{selected.length} selected</small>
     </label>
+  )
+}
+
+function ProductEditorModal({
+  session,
+  isSaving,
+  onClose,
+  onSave,
+}: ProductEditorModalProps) {
+  const [draft, setDraft] = useState(() => createEditorDraft(session.product))
+
+  function updateField(
+    key: 'sku' | 'name' | 'type' | 'hsName' | 'hsCode' | 'category',
+    value: string,
+  ) {
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      [key]: value,
+    }))
+  }
+
+  function updateImageUrl(index: number, value: string) {
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      imageUrls: currentDraft.imageUrls.map((imageUrl, imageIndex) =>
+        imageIndex === index ? value : imageUrl,
+      ),
+    }))
+  }
+
+  function addImageUrl() {
+    setDraft((currentDraft) => ({
+      ...currentDraft,
+      imageUrls: [...currentDraft.imageUrls, ''],
+    }))
+  }
+
+  function removeImageUrl(index: number) {
+    setDraft((currentDraft) => {
+      const nextImageUrls = currentDraft.imageUrls.filter((_, imageIndex) => imageIndex !== index)
+
+      return {
+        ...currentDraft,
+        imageUrls: nextImageUrls.length > 0 ? nextImageUrls : [''],
+      }
+    })
+  }
+
+  return (
+    <div className="editor-overlay" role="presentation" onClick={onClose}>
+      <section
+        aria-label={`Edit ${session.product.name}`}
+        aria-modal="true"
+        className="editor-modal"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="editor-modal__header">
+          <div>
+            <p className="eyebrow">Local Edit</p>
+            <h2>Edit {session.product.sku}</h2>
+          </div>
+          <button
+            aria-label="Close product editor"
+            className="gallery-close"
+            type="button"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <form
+          className="editor-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            onSave(session.originalSku, draft)
+          }}
+        >
+          <div className="editor-form__grid">
+            <label className="filter-field">
+              <span>SKU</span>
+              <input
+                name="sku"
+                type="text"
+                value={draft.sku}
+                onChange={(event) => updateField('sku', event.target.value)}
+              />
+            </label>
+
+            <label className="filter-field">
+              <span>Tên</span>
+              <input
+                name="name"
+                type="text"
+                value={draft.name}
+                onChange={(event) => updateField('name', event.target.value)}
+              />
+            </label>
+
+            <label className="filter-field">
+              <span>Type</span>
+              <input
+                name="type"
+                type="text"
+                value={draft.type}
+                onChange={(event) => updateField('type', event.target.value)}
+              />
+            </label>
+
+            <label className="filter-field">
+              <span>HS Name</span>
+              <input
+                name="hsName"
+                type="text"
+                value={draft.hsName}
+                onChange={(event) => updateField('hsName', event.target.value)}
+              />
+            </label>
+
+            <label className="filter-field">
+              <span>HS Code</span>
+              <input
+                name="hsCode"
+                type="text"
+                value={draft.hsCode}
+                onChange={(event) => updateField('hsCode', event.target.value)}
+              />
+            </label>
+
+            <label className="filter-field">
+              <span>Category</span>
+              <input
+                name="category"
+                type="text"
+                value={draft.category}
+                onChange={(event) => updateField('category', event.target.value)}
+              />
+            </label>
+          </div>
+
+          <section className="editor-form__images" aria-label="Image URL editor">
+            <div className="editor-form__images-header">
+              <div>
+                <p className="eyebrow">Images</p>
+                <h3>Image URLs</h3>
+              </div>
+              <button className="button button--ghost" type="button" onClick={addImageUrl}>
+                Add Image URL
+              </button>
+            </div>
+
+            <div className="editor-image-list">
+              {draft.imageUrls.map((imageUrl, imageIndex) => (
+                <div key={`${session.originalSku}-${imageIndex}`} className="editor-image-row">
+                  <img
+                    alt={`Preview for image URL ${imageIndex + 1}`}
+                    className="editor-image-row__preview"
+                    loading="lazy"
+                    src={imageUrl.trim() || FALLBACK_IMAGE_URL}
+                  />
+                  <input
+                    aria-label={`Image URL ${imageIndex + 1}`}
+                    className="editor-image-row__input"
+                    type="url"
+                    value={imageUrl}
+                    onChange={(event) => updateImageUrl(imageIndex, event.target.value)}
+                  />
+                  <button
+                    aria-label={`Remove image URL ${imageIndex + 1}`}
+                    className="button button--ghost editor-image-row__remove"
+                    type="button"
+                    onClick={() => removeImageUrl(imageIndex)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <div className="editor-modal__actions">
+            <button className="button button--ghost" type="button" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="button button--primary" disabled={isSaving} type="submit">
+              Save Product
+            </button>
+          </div>
+        </form>
+      </section>
+    </div>
   )
 }
 
@@ -450,12 +757,7 @@ function ImageGallery({
               type="button"
               onClick={() => onSelectImage(imageIndex)}
             >
-              <img
-                alt=""
-                className="gallery-thumb__image"
-                loading="lazy"
-                src={imageUrl}
-              />
+              <img alt="" className="gallery-thumb__image" loading="lazy" src={imageUrl} />
             </button>
           ))}
         </div>
@@ -464,10 +766,13 @@ function ImageGallery({
   )
 }
 
-function App() {
+function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
+  const editableCatalog = isEditableCatalog ?? import.meta.env.DEV
   const [products, setProducts] = useState(seedProducts)
   const [filters, setFilters] = useState(INITIAL_FILTERS)
-  const [catalogSummary, setCatalogSummary] = useState(SEED_SUMMARY)
+  const [catalogSummary, setCatalogSummary] = useState(() =>
+    buildCatalogSummary(seedProducts, editableCatalog),
+  )
   const [feedback, setFeedback] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
@@ -476,7 +781,14 @@ function App() {
   const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
   const [selectedImageIndex, setSelectedImageIndex] = useState(0)
   const [isScrollTopButtonVisible, setIsScrollTopButtonVisible] = useState(false)
+  const [pastedHtml, setPastedHtml] = useState('')
+  const [selectedImportFiles, setSelectedImportFiles] = useState<File[]>([])
+  const [importPreview, setImportPreview] = useState<ImportPreviewResponse | null>(null)
+  const [selectedDuplicateSkus, setSelectedDuplicateSkus] = useState<string[]>([])
+  const [editingSession, setEditingSession] = useState<ProductEditorSession | null>(null)
+  const [isSourceRequestPending, setIsSourceRequestPending] = useState(false)
 
+  const importFileInputRef = useRef<HTMLInputElement | null>(null)
   const deferredNameQuery = useDeferredValue(filters.nameQuery)
   const deferredSkuQuery = useDeferredValue(filters.skuQuery)
 
@@ -487,8 +799,10 @@ function App() {
   const selectedTypes = new Set(filters.types)
   const selectedHsNames = new Set(filters.hsNames)
   const selectedCategories = new Set(filters.categories)
+  const selectedDuplicateSkuSet = new Set(selectedDuplicateSkus)
   const isCompactTable = !isAdvancedSearchExpanded
-  const visibleTableColumnCount = isCompactTable ? 3 : 7
+  const visibleTableColumnCount = (isCompactTable ? 3 : 7) + (editableCatalog ? 1 : 0)
+  const isBusy = isPending || isSourceRequestPending
 
   const filteredProducts = products.filter((product) => {
     if (deferredNameQuery && !matchesText(product.name, deferredNameQuery)) {
@@ -514,6 +828,28 @@ function App() {
     return true
   })
 
+  function replaceCatalog(nextProducts: Product[]) {
+    startTransition(() => {
+      setProducts(nextProducts)
+      setCatalogSummary(buildCatalogSummary(nextProducts, editableCatalog))
+    })
+  }
+
+  function resetImportPreview() {
+    setImportPreview(null)
+    setSelectedDuplicateSkus([])
+  }
+
+  function clearSourceInputs() {
+    setPastedHtml('')
+    setSelectedImportFiles([])
+    resetImportPreview()
+
+    if (importFileInputRef.current) {
+      importFileInputRef.current.value = ''
+    }
+  }
+
   function updateFilter<Key extends keyof FilterState>(key: Key, value: FilterState[Key]) {
     setFilters((currentFilters) => ({
       ...currentFilters,
@@ -531,26 +867,46 @@ function App() {
     setSelectedImageIndex(0)
   }
 
-  const handleGalleryEscape = useEffectEvent((event: KeyboardEvent) => {
-    if (event.key === 'Escape') {
+  function openProductEditor(product: Product) {
+    setEditingSession({
+      originalSku: product.sku,
+      product: cloneProduct(product),
+    })
+  }
+
+  function closeProductEditor() {
+    setEditingSession(null)
+  }
+
+  const handleModalEscape = useEffectEvent((event: KeyboardEvent) => {
+    if (event.key !== 'Escape') {
+      return
+    }
+
+    if (editingSession) {
+      closeProductEditor()
+      return
+    }
+
+    if (galleryProduct) {
       closeGallery()
     }
   })
 
   useEffect(() => {
-    if (!galleryProduct) {
+    if (!galleryProduct && !editingSession) {
       return
     }
 
     const previousOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', handleGalleryEscape)
+    window.addEventListener('keydown', handleModalEscape)
 
     return () => {
       document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', handleGalleryEscape)
+      window.removeEventListener('keydown', handleModalEscape)
     }
-  }, [galleryProduct, handleGalleryEscape])
+  }, [editingSession, galleryProduct, handleModalEscape])
 
   useEffect(() => {
     function handleWindowScroll() {
@@ -583,69 +939,135 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  function restoreSeedData() {
-    startTransition(() => {
-      setProducts(seedProducts)
-      setFilters(INITIAL_FILTERS)
-      setCatalogSummary(SEED_SUMMARY)
-    })
-    closeGallery()
-    setErrorMessage(null)
-    setFeedback('Restored the bundled seed snapshot.')
+  function toggleDuplicateSkuSelection(sku: string) {
+    setSelectedDuplicateSkus((currentSkus) =>
+      currentSkus.includes(sku)
+        ? currentSkus.filter((currentSku) => currentSku !== sku)
+        : [...currentSkus, sku],
+    )
   }
 
-  async function handleImport(event: ChangeEvent<HTMLInputElement>) {
-    const fileList = event.target.files
+  function handleSelectedImportFiles(event: ChangeEvent<HTMLInputElement>) {
+    setSelectedImportFiles(Array.from(event.target.files ?? []))
+    resetImportPreview()
+    setFeedback(null)
+    setErrorMessage(null)
+  }
 
-    if (!fileList?.length) {
+  async function buildUploadedSources() {
+    return Promise.all(
+      selectedImportFiles.map(async (file) => ({
+        name: file.name,
+        html: await file.text(),
+      })),
+    )
+  }
+
+  async function handlePreviewImport() {
+    if (!editableCatalog) {
       return
     }
 
     setFeedback(null)
     setErrorMessage(null)
 
+    const uploadedSources = await buildUploadedSources()
+
+    if (!pastedHtml.trim() && uploadedSources.length === 0) {
+      setErrorMessage('Paste HTML or upload at least one HTML file before previewing an import.')
+      return
+    }
+
+    setIsSourceRequestPending(true)
+
     try {
-      const files = Array.from(fileList)
-      const importedResults = await Promise.all(
-        files.map(async (file) => ({
-          fileName: file.name,
-          products: parseProductsHtml(await file.text(), file.name),
-        })),
-      )
+      const preview = await catalogApi.previewImport({
+        pastedHtml,
+        uploadedSources,
+      })
 
-      const validImports = importedResults.filter((result) => result.products.length > 0)
-      const invalidFiles = importedResults
-        .filter((result) => result.products.length === 0)
-        .map((result) => result.fileName)
+      setImportPreview(preview)
+      setSelectedDuplicateSkus([])
 
-      if (validImports.length === 0) {
-        setErrorMessage('No valid product rows were found in the selected HTML files.')
-        event.target.value = ''
+      if (preview.newProducts.length === 0 && preview.duplicateCandidates.length === 0) {
+        setErrorMessage('No valid product rows were found in the provided HTML.')
         return
       }
 
-      const nextProducts = dedupeProductsBySku(validImports.flatMap((result) => result.products))
-      const nextSummary: CatalogSummary = {
-        label: `Imported snapshot · ${validImports.map((result) => result.fileName).join(', ')}`,
-        fileCount: files.length,
-        productCount: nextProducts.length,
-        invalidFiles,
-      }
-
-      startTransition(() => {
-        setProducts(nextProducts)
-        setFilters(INITIAL_FILTERS)
-        setCatalogSummary(nextSummary)
-      })
-
-      closeGallery()
-      setFeedback(buildImportMessage(nextSummary))
-    } catch {
+      setFeedback(buildPreviewMessage(preview))
+    } catch (error) {
       setErrorMessage(
-        'The selected files could not be parsed. Please export the product list HTML again and retry.',
+        error instanceof Error
+          ? error.message
+          : 'The catalog import preview could not be generated.',
       )
     } finally {
-      event.target.value = ''
+      setIsSourceRequestPending(false)
+    }
+  }
+
+  async function handleApplyImport() {
+    if (!editableCatalog || !importPreview) {
+      return
+    }
+
+    const duplicateUpdates = importPreview.duplicateCandidates
+      .filter((candidate) => selectedDuplicateSkuSet.has(candidate.sku))
+      .map((candidate) => candidate.incoming)
+
+    if (importPreview.newProducts.length === 0 && duplicateUpdates.length === 0) {
+      setErrorMessage('Select at least one duplicate SKU or preview a new SKU before applying changes.')
+      return
+    }
+
+    setFeedback(null)
+    setErrorMessage(null)
+    setIsSourceRequestPending(true)
+
+    try {
+      const response = await catalogApi.applyImport({
+        newProducts: importPreview.newProducts,
+        duplicateUpdates,
+      })
+
+      replaceCatalog(response.products)
+      clearSourceInputs()
+      closeGallery()
+      setFeedback(buildApplyMessage(importPreview.newProducts.length, duplicateUpdates.length))
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'The catalog source file could not be updated.',
+      )
+    } finally {
+      setIsSourceRequestPending(false)
+    }
+  }
+
+  async function handleSaveEditedProduct(originalSku: string, product: Product) {
+    if (!editableCatalog) {
+      return
+    }
+
+    setFeedback(null)
+    setErrorMessage(null)
+    setIsSourceRequestPending(true)
+
+    try {
+      const response = await catalogApi.updateProduct({
+        originalSku,
+        product,
+      })
+
+      replaceCatalog(response.products)
+      closeGallery()
+      closeProductEditor()
+      setFeedback(`Saved ${response.product.sku} to ${SOURCE_FILE_LABEL}.`)
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : 'The product could not be saved to the source file.',
+      )
+    } finally {
+      setIsSourceRequestPending(false)
     }
   }
 
@@ -724,10 +1146,10 @@ function App() {
             <section className="hero-panel">
               <div className="hero-panel__copy">
                 <p className="eyebrow">Minh &amp; Brothers Product Index</p>
-                <h1>One catalog for every exported product page.</h1>
+                <h1>One catalog for every tracked product.</h1>
                 <p className="hero-panel__lede">
-                  Search by name or SKU, slice the list by Type, HS Name, or Category, and
-                  reload future HTML exports without leaving the page.
+                  Search by SKU, open advanced filters only when needed, and review every product
+                  image without leaving the catalog table.
                 </p>
               </div>
 
@@ -738,7 +1160,7 @@ function App() {
                   value={filteredProducts.length.toLocaleString('en-US')}
                 />
                 <StatCard
-                  detail={`${catalogSummary.fileCount} file${catalogSummary.fileCount === 1 ? '' : 's'} in the active snapshot`}
+                  detail={`${catalogSummary.fileCount} source file in the active snapshot`}
                   label="Catalog Source"
                   value={catalogSummary.fileCount.toString()}
                 />
@@ -756,43 +1178,153 @@ function App() {
                 <p className="toolbar-panel__source">{catalogSummary.label}</p>
                 <p className="toolbar-panel__meta">
                   {catalogSummary.productCount.toLocaleString('en-US')} products
-                  {catalogSummary.invalidFiles.length > 0
-                    ? ` · ${catalogSummary.invalidFiles.length} skipped`
-                    : ''}
                 </p>
-              </div>
-
-              <div className="toolbar-panel__actions">
-                <label className="button button--primary" htmlFor="catalog-import">
-                  Import HTML Files
-                </label>
-                <input
-                  accept=".html,text/html"
-                  className="sr-only"
-                  id="catalog-import"
-                  multiple
-                  type="file"
-                  onChange={handleImport}
-                />
-                <button className="button button--ghost" type="button" onClick={restoreSeedData}>
-                  Reset to Seed Data
-                </button>
-                <button className="button button--ghost" type="button" onClick={clearFilters}>
-                  Clear Filters
-                </button>
               </div>
             </section>
           </div>
         ) : null}
       </section>
 
-      {(feedback || errorMessage || isPending) && (
+      {(feedback || errorMessage || isBusy) && (
         <section aria-live="polite" className="status-row">
-          {isPending ? <p className="status-pill">Refreshing catalog...</p> : null}
+          {isBusy ? <p className="status-pill">Working with the catalog source...</p> : null}
           {feedback ? <p className="status-pill status-pill--success">{feedback}</p> : null}
           {errorMessage ? <p className="status-pill status-pill--error">{errorMessage}</p> : null}
         </section>
       )}
+
+      {editableCatalog ? (
+        <section aria-label="Catalog source editor" className="source-panel">
+          <div className="source-panel__header">
+            <div>
+              <p className="eyebrow">Local Source</p>
+              <h2>Preview catalog changes before writing them.</h2>
+            </div>
+            <p className="source-panel__hint">
+              Local dev only. Paste exported HTML or upload saved HTML files, then review new and
+              duplicate SKUs before updating {SOURCE_FILE_LABEL}.
+            </p>
+          </div>
+
+          <div className="source-panel__grid">
+            <label className="filter-field source-panel__field">
+              <span>Paste HTML</span>
+              <textarea
+                aria-label="Paste HTML"
+                className="source-panel__textarea"
+                placeholder="Paste exported HTML here"
+                value={pastedHtml}
+                onChange={(event) => {
+                  setPastedHtml(event.target.value)
+                  resetImportPreview()
+                }}
+              />
+            </label>
+
+            <label className="filter-field source-panel__field">
+              <span>Upload HTML Files</span>
+              <input
+                ref={importFileInputRef}
+                accept=".html,text/html"
+                aria-label="Upload HTML Files"
+                className="source-panel__file-input"
+                multiple
+                type="file"
+                onChange={handleSelectedImportFiles}
+              />
+              <small>
+                {selectedImportFiles.length > 0
+                  ? `${selectedImportFiles.length} file${selectedImportFiles.length === 1 ? '' : 's'} selected`
+                  : 'Optional: combine uploaded HTML files with the pasted HTML preview.'}
+              </small>
+            </label>
+          </div>
+
+          <div className="source-panel__actions">
+            <button
+              className="button button--primary"
+              disabled={isBusy}
+              type="button"
+              onClick={handlePreviewImport}
+            >
+              Preview Import
+            </button>
+            <button
+              className="button button--ghost"
+              disabled={
+                isBusy ||
+                !importPreview ||
+                (importPreview.newProducts.length === 0 && selectedDuplicateSkus.length === 0)
+              }
+              type="button"
+              onClick={handleApplyImport}
+            >
+              Apply to Source
+            </button>
+          </div>
+
+          {importPreview ? (
+            <section aria-label="Import preview results" className="source-preview">
+              <article className="source-preview__card">
+                <h3>New SKUs</h3>
+                {importPreview.newProducts.length > 0 ? (
+                  <ul className="source-preview__list">
+                    {importPreview.newProducts.map((product) => (
+                      <li key={product.sku}>
+                        <strong>{product.sku}</strong>
+                        <span>{product.name}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="source-preview__empty">No new SKUs in this preview.</p>
+                )}
+              </article>
+
+              <article className="source-preview__card">
+                <h3>Duplicate SKUs</h3>
+                {importPreview.duplicateCandidates.length > 0 ? (
+                  <ul className="source-preview__list source-preview__list--duplicates">
+                    {importPreview.duplicateCandidates.map((candidate) => (
+                      <li key={candidate.sku} className="duplicate-card">
+                        <label className="duplicate-card__toggle">
+                          <input
+                            checked={selectedDuplicateSkuSet.has(candidate.sku)}
+                            type="checkbox"
+                            onChange={() => toggleDuplicateSkuSelection(candidate.sku)}
+                          />
+                          <span>Overwrite {candidate.sku}</span>
+                        </label>
+                        <p>
+                          <strong>Existing:</strong> {candidate.existing.name}
+                        </p>
+                        <p>
+                          <strong>Incoming:</strong> {candidate.incoming.name}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="source-preview__empty">No duplicate SKUs need review.</p>
+                )}
+              </article>
+
+              <article className="source-preview__card">
+                <h3>Invalid Sources</h3>
+                {importPreview.invalidSources.length > 0 ? (
+                  <ul className="source-preview__list">
+                    {importPreview.invalidSources.map((sourceName) => (
+                      <li key={sourceName}>{sourceName}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="source-preview__empty">Every provided source produced product rows.</p>
+                )}
+              </article>
+            </section>
+          ) : null}
+        </section>
+      ) : null}
 
       <section aria-label="Product filters" className="filters-panel">
         <div className="filters-panel__header">
@@ -800,10 +1332,14 @@ function App() {
             <p className="eyebrow">Filters</p>
             <h2>Refine the catalog in place.</h2>
           </div>
-          <p className="filters-panel__hint">
-            Text filters use substring matching. Facets use exact matches and combine together
-            with AND logic.
-          </p>
+
+          <div className="filters-panel__header-actions">
+            
+            <p className="filters-panel__hint">
+              Text filters use substring matching. Facets use exact matches and combine together
+              with AND logic.
+            </p>
+          </div>
         </div>
 
         <div className="filters-panel__controls">
@@ -827,6 +1363,10 @@ function App() {
           >
             {isAdvancedSearchExpanded ? 'Hide Advanced Search' : 'Show Advanced Search'}
           </button>
+
+          <button className="button button--ghost" type="button" onClick={clearFilters}>
+              Clear Filters
+            </button>
         </div>
 
         {isAdvancedSearchExpanded ? (
@@ -899,6 +1439,11 @@ function App() {
                     <th scope="col">Category</th>
                   </>
                 ) : null}
+                {editableCatalog ? (
+                  <th className="product-table__actions-heading" scope="col">
+                    Edit
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
@@ -928,6 +1473,18 @@ function App() {
                         <td>{product.category || UNASSIGNED_LABEL}</td>
                       </>
                     ) : null}
+                    {editableCatalog ? (
+                      <td className="product-table__actions">
+                        <button
+                          aria-label={`Edit product ${product.sku}`}
+                          className="button button--ghost row-edit-button"
+                          type="button"
+                          onClick={() => openProductEditor(product)}
+                        >
+                          Edit
+                        </button>
+                      </td>
+                    ) : null}
                   </tr>
                 ))
               )}
@@ -945,6 +1502,16 @@ function App() {
         >
           Top
         </button>
+      ) : null}
+
+      {editingSession ? (
+        <ProductEditorModal
+          key={editingSession.originalSku}
+          isSaving={isSourceRequestPending}
+          session={editingSession}
+          onClose={closeProductEditor}
+          onSave={handleSaveEditedProduct}
+        />
       ) : null}
 
       {galleryProduct ? (
