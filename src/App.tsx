@@ -1357,9 +1357,6 @@ function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
           </div>
 
           <div className="filters-panel__header-actions">
-            <button className="button button--ghost" type="button" onClick={clearFilters}>
-              Clear Filters
-            </button>
             <p className="filters-panel__hint">
               Text filters use substring matching. Facets use exact matches and combine together
               with AND logic.
@@ -1387,6 +1384,10 @@ function App({ isEditableCatalog, catalogApi = defaultCatalogApi }: AppProps) {
             onClick={toggleAdvancedSearch}
           >
             {isAdvancedSearchExpanded ? 'Hide Advanced Search' : 'Show Advanced Search'}
+          </button>
+
+          <button className="button button--ghost" type="button" onClick={clearFilters}>
+            Clear Filters
           </button>
         </div>
 
