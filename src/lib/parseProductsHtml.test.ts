@@ -21,7 +21,8 @@ function toFixtureImagePath(imageUrl: string) {
 }
 
 function renderProductRow(product: Product, index: number) {
-  const imagePath = escapeHtml(toFixtureImagePath(product.imageUrl))
+  const primaryImageUrl = product.imageUrls[0] ?? ''
+  const imagePath = escapeHtml(toFixtureImagePath(primaryImageUrl))
 
   return `
     <tr>
@@ -73,13 +74,16 @@ describe('parseProductsHtml', () => {
     expect(new Set(products.map((product) => product.sku)).size).toBe(1573)
   })
 
-  it('keeps Vietnamese text intact and builds absolute image URLs', () => {
+  it('collects unique image URLs from the image cell in source order', () => {
     const fixtureHtml = `
       <table>
         <tr>
           <td><a data-toggle="collapse" data-target="#product_1"></a></td>
           <td>
-            <a href="/upload/product/mock/import-1.jpg"><img src="/upload/product/mock/import-1.jpg"></a>
+            <a href="/upload/product/mock/import-1.jpg">
+              <img src="/upload/product/mock/import-2.jpg">
+              <img data-src="/upload/product/mock/import-1.jpg">
+            </a>
           </td>
           <td style="vertical-align: middle;">Tranh mảnh ghép 2 tầng D48</td>
           <td style="vertical-align: middle;">D48</td>
@@ -97,7 +101,10 @@ describe('parseProductsHtml', () => {
     expect(products[0]).toMatchObject({
       name: 'Tranh mảnh ghép 2 tầng D48',
       sku: 'D48',
-      imageUrl: 'https://minhbros.com/upload/product/mock/import-1.jpg',
+      imageUrls: [
+        'https://minhbros.com/upload/product/mock/import-1.jpg',
+        'https://minhbros.com/upload/product/mock/import-2.jpg',
+      ],
     })
   })
 
@@ -129,7 +136,39 @@ describe('parseProductsHtml', () => {
         hsName: UNASSIGNED_LABEL,
         hsCode: '1234',
         category: UNASSIGNED_LABEL,
-        imageUrl: 'https://minhbros.com/upload/product/example/item.jpg',
+        imageUrls: ['https://minhbros.com/upload/product/example/item.jpg'],
+        sourceLabel: 'fixture',
+      },
+    ])
+  })
+
+  it('uses a placeholder image when the row has no image URLs', () => {
+    const html = `
+      <table>
+        <tr>
+          <td><a data-toggle="collapse" data-target="#product_8"></a></td>
+          <td><span>No image available</span></td>
+          <td style="vertical-align: middle;">Placeholder product</td>
+          <td style="vertical-align: middle;">PLACEHOLDER-01</td>
+          <td style="vertical-align: middle;">Wood</td>
+          <td style="vertical-align: middle;">Decor</td>
+          <td style="vertical-align: middle;">1111</td>
+          <td style="vertical-align: middle;">Table Decor</td>
+          <td></td>
+          <td class="text-center"><a href="/edit-product/8">Edit</a></td>
+        </tr>
+      </table>
+    `
+
+    expect(parseProductsHtml(html, 'fixture')).toEqual([
+      {
+        sku: 'PLACEHOLDER-01',
+        name: 'Placeholder product',
+        type: 'Wood',
+        hsName: 'Decor',
+        hsCode: '1111',
+        category: 'Table Decor',
+        imageUrls: ['https://minhbros.com/upload/product/placeholder.jpg'],
         sourceLabel: 'fixture',
       },
     ])
@@ -163,7 +202,55 @@ describe('parseProductsHtml', () => {
         hsName: UNASSIGNED_LABEL,
         hsCode: '',
         category: UNASSIGNED_LABEL,
-        imageUrl: 'https://minhbros.com/upload/order_item/51197.jpg',
+        imageUrls: ['https://minhbros.com/upload/order_item/51197.jpg'],
+        sourceLabel: 'fixture',
+      },
+    ])
+  })
+
+  it('keeps the first row when a later row has the same SKU', () => {
+    const html = `
+      <table>
+        <tr>
+          <td><a data-toggle="collapse" data-target="#product_10"></a></td>
+          <td>
+            <a href="/upload/product/example/first.jpg"><img src="/upload/product/example/first.jpg"></a>
+          </td>
+          <td style="vertical-align: middle;">First product</td>
+          <td style="vertical-align: middle;">DUP-01</td>
+          <td style="vertical-align: middle;">Wood</td>
+          <td style="vertical-align: middle;">Decor</td>
+          <td style="vertical-align: middle;">1111</td>
+          <td style="vertical-align: middle;">Table Decor</td>
+          <td></td>
+          <td class="text-center"><a href="/edit-product/10">Edit</a></td>
+        </tr>
+        <tr>
+          <td><a data-toggle="collapse" data-target="#product_11"></a></td>
+          <td>
+            <a href="/upload/product/example/second.jpg"><img src="/upload/product/example/second.jpg"></a>
+          </td>
+          <td style="vertical-align: middle;">Second product</td>
+          <td style="vertical-align: middle;">DUP-01</td>
+          <td style="vertical-align: middle;">Glass</td>
+          <td style="vertical-align: middle;">Alt Decor</td>
+          <td style="vertical-align: middle;">2222</td>
+          <td style="vertical-align: middle;">Wall Hangings</td>
+          <td></td>
+          <td class="text-center"><a href="/edit-product/11">Edit</a></td>
+        </tr>
+      </table>
+    `
+
+    expect(parseProductsHtml(html, 'fixture')).toEqual([
+      {
+        sku: 'DUP-01',
+        name: 'First product',
+        type: 'Wood',
+        hsName: 'Decor',
+        hsCode: '1111',
+        category: 'Table Decor',
+        imageUrls: ['https://minhbros.com/upload/product/example/first.jpg'],
         sourceLabel: 'fixture',
       },
     ])

@@ -5,7 +5,7 @@ export type Product = {
   hsName: string
   hsCode: string
   category: string
-  imageUrl: string
+  imageUrls: string[]
   sourceLabel: string
 }
 

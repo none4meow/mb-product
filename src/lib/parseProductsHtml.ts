@@ -3,6 +3,7 @@ import type { Product } from '../types/catalog'
 export const UNASSIGNED_LABEL = 'Unassigned'
 
 const BASE_IMAGE_URL = 'https://minhbros.com'
+const PLACEHOLDER_IMAGE_URL = `${BASE_IMAGE_URL}/upload/product/placeholder.jpg`
 
 const PRODUCT_ROW_PATTERN =
   /<tr>\s*<td><a data-toggle="collapse"[\s\S]*?<\/td>\s*<td>(?<imageCell>[\s\S]*?)<\/td>\s*<td style="vertical-align: middle;">(?<name>[\s\S]*?)<\/td>\s*<td style="vertical-align: middle;">(?<sku>[\s\S]*?)<\/td>\s*<td style="vertical-align: middle;">(?<type>[\s\S]*?)<\/td>\s*<td style="vertical-align: middle;">(?<hsName>[\s\S]*?)<\/td>\s*<td style="vertical-align: middle;">(?<hsCode>[\s\S]*?)<\/td>\s*<td style="vertical-align: middle;">(?<category>[\s\S]*?)<\/td>\s*<td>[\s\S]*?<\/td>\s*<td class="text-center"[\s\S]*?<\/td>\s*<\/tr>/g
@@ -77,25 +78,37 @@ function normalizeName(value: string, rowHtml: string) {
   return fallbackProductId ? `Untitled product ${fallbackProductId}` : 'Untitled product'
 }
 
-function normalizeImageUrl(imageCell: string) {
-  const imageMatch = Array.from(imageCell.matchAll(IMAGE_PATH_PATTERN)).find((match) =>
-    Boolean(match.groups?.path),
-  )
+function normalizeImageUrls(imageCell: string) {
+  const imageUrls: string[] = []
+  const seenImageUrls = new Set<string>()
 
-  const matchedPath = imageMatch?.groups?.path
+  for (const match of imageCell.matchAll(IMAGE_PATH_PATTERN)) {
+    const matchedPath = match.groups?.path
 
-  if (!matchedPath) {
-    return `${BASE_IMAGE_URL}/upload/product/placeholder.jpg`
+    if (!matchedPath) {
+      continue
+    }
+
+    const normalizedImageUrl = matchedPath.startsWith('http')
+      ? matchedPath
+      : `${BASE_IMAGE_URL}${matchedPath}`
+
+    if (!seenImageUrls.has(normalizedImageUrl)) {
+      seenImageUrls.add(normalizedImageUrl)
+      imageUrls.push(normalizedImageUrl)
+    }
   }
 
-  return matchedPath.startsWith('http') ? matchedPath : `${BASE_IMAGE_URL}${matchedPath}`
+  return imageUrls.length > 0 ? imageUrls : [PLACEHOLDER_IMAGE_URL]
 }
 
 export function dedupeProductsBySku(products: Product[]) {
   const productMap = new Map<string, Product>()
 
   for (const product of products) {
-    productMap.set(product.sku, product)
+    if (!productMap.has(product.sku)) {
+      productMap.set(product.sku, product)
+    }
   }
 
   return Array.from(productMap.values())
@@ -119,7 +132,7 @@ export function parseProductsHtml(html: string, sourceLabel: string): Product[] 
       hsName: normalizeFacetValue(match.groups?.hsName ?? ''),
       hsCode: cleanText(match.groups?.hsCode ?? ''),
       category: normalizeFacetValue(match.groups?.category ?? ''),
-      imageUrl: normalizeImageUrl(match.groups?.imageCell ?? ''),
+      imageUrls: normalizeImageUrls(match.groups?.imageCell ?? ''),
       sourceLabel,
     })
   }

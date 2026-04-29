@@ -1,4 +1,16 @@
-import { useDeferredValue, useState, useTransition, type ChangeEvent } from 'react'
+import {
+  type Dispatch,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useRef,
+  type SetStateAction,
+  useState,
+  useTransition,
+  type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
+  type TouchEvent as ReactTouchEvent,
+} from 'react'
 import initialProducts from './data/products.initial.json'
 import './App.css'
 import {
@@ -10,6 +22,8 @@ import type { FilterState, Product } from './types/catalog'
 
 const SEED_FILE_COUNT = 4
 const FACET_SIZE = 6
+const FALLBACK_IMAGE_URL = 'https://minhbros.com/upload/product/placeholder.jpg'
+const GALLERY_SWIPE_THRESHOLD_PX = 48
 
 const INITIAL_FILTERS: FilterState = {
   nameQuery: '',
@@ -29,6 +43,22 @@ type CatalogSummary = {
 }
 
 type FacetKey = 'types' | 'hsNames' | 'categories'
+
+type ImageGalleryProps = {
+  product: Product
+  selectedImageIndex: number
+  onClose: () => void
+  onSelectImage: Dispatch<SetStateAction<number>>
+}
+
+type SwipeGesture = {
+  source: 'pointer' | 'touch'
+  startX: number
+  startY: number
+  hasTriggered: boolean
+  pointerId?: number
+  touchId?: number
+}
 
 const SEED_SUMMARY: CatalogSummary = {
   label: 'Bundled seed snapshot',
@@ -65,6 +95,27 @@ function buildImportMessage(summary: CatalogSummary) {
   }
 
   return `Imported ${summary.productCount} products from ${summary.fileCount} file${summary.fileCount === 1 ? '' : 's'} and skipped ${summary.invalidFiles.length} invalid file${summary.invalidFiles.length === 1 ? '' : 's'}.`
+}
+
+function getPrimaryImageUrl(product: Product) {
+  return product.imageUrls[0] ?? FALLBACK_IMAGE_URL
+}
+
+function isSwipePointer(pointerType: string) {
+  return pointerType === '' || pointerType === 'mouse' || pointerType === 'touch' || pointerType === 'pen'
+}
+
+function getTouchByIdentifier(
+  touchList: TouchList | ReactTouchEvent<HTMLElement>['changedTouches'],
+  touchId: number,
+) {
+  for (const touch of Array.from(touchList)) {
+    if (touch.identifier === touchId) {
+      return touch
+    }
+  }
+
+  return null
 }
 
 function StatCard({
@@ -121,6 +172,282 @@ function FacetField({
   )
 }
 
+function ImageGallery({
+  product,
+  selectedImageIndex,
+  onClose,
+  onSelectImage,
+}: ImageGalleryProps) {
+  const swipeGestureRef = useRef<SwipeGesture | null>(null)
+  const imageCount = product.imageUrls.length
+  const selectedImageUrl = product.imageUrls[selectedImageIndex] ?? getPrimaryImageUrl(product)
+
+  function resetSwipeGesture() {
+    swipeGestureRef.current = null
+  }
+
+  function selectRelativeImage(direction: 1 | -1) {
+    if (imageCount < 2) {
+      return
+    }
+
+    onSelectImage((currentImageIndex) => (currentImageIndex + direction + imageCount) % imageCount)
+  }
+
+  function triggerSwipeIfNeeded(
+    swipeGesture: SwipeGesture,
+    currentX: number,
+    currentY: number,
+  ) {
+    if (swipeGesture.hasTriggered) {
+      return false
+    }
+
+    const deltaX = currentX - swipeGesture.startX
+    const deltaY = currentY - swipeGesture.startY
+
+    if (
+      Math.abs(deltaX) < GALLERY_SWIPE_THRESHOLD_PX ||
+      Math.abs(deltaX) <= Math.abs(deltaY)
+    ) {
+      return false
+    }
+
+    swipeGesture.hasTriggered = true
+    selectRelativeImage(deltaX < 0 ? 1 : -1)
+    return true
+  }
+
+  function handleStagePointerDown(event: ReactPointerEvent<HTMLElement>) {
+    if (
+      !event.isPrimary ||
+      !isSwipePointer(event.pointerType) ||
+      (event.pointerType === 'mouse' && event.button !== 0) ||
+      imageCount < 2
+    ) {
+      return
+    }
+
+    swipeGestureRef.current = {
+      source: 'pointer',
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      hasTriggered: false,
+    }
+
+    if (typeof event.currentTarget.setPointerCapture === 'function') {
+      try {
+        event.currentTarget.setPointerCapture(event.pointerId)
+      } catch {
+        // Ignore capture failures in browsers/environments that do not support it reliably.
+      }
+    }
+  }
+
+  function handleStagePointerUp(event: ReactPointerEvent<HTMLElement>) {
+    const swipeGesture = swipeGestureRef.current
+
+    if (
+      !swipeGesture ||
+      swipeGesture.source !== 'pointer' ||
+      swipeGesture.pointerId !== event.pointerId ||
+      !event.isPrimary ||
+      !isSwipePointer(event.pointerType)
+    ) {
+      return
+    }
+
+    if (typeof event.currentTarget.releasePointerCapture === 'function') {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      } catch {
+        // Ignore capture failures in browsers/environments that do not support it reliably.
+      }
+    }
+
+    resetSwipeGesture()
+  }
+
+  function handleStagePointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const swipeGesture = swipeGestureRef.current
+
+    if (
+      !swipeGesture ||
+      swipeGesture.source !== 'pointer' ||
+      swipeGesture.pointerId !== event.pointerId ||
+      !event.isPrimary ||
+      !isSwipePointer(event.pointerType)
+    ) {
+      return
+    }
+
+    if (triggerSwipeIfNeeded(swipeGesture, event.clientX, event.clientY)) {
+      event.preventDefault()
+    }
+  }
+
+  function handleStagePointerCancel(event: ReactPointerEvent<HTMLElement>) {
+    if (
+      swipeGestureRef.current?.source === 'pointer' &&
+      swipeGestureRef.current.pointerId === event.pointerId &&
+      typeof event.currentTarget.releasePointerCapture === 'function'
+    ) {
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      } catch {
+        // Ignore capture failures in browsers/environments that do not support it reliably.
+      }
+    }
+
+    resetSwipeGesture()
+  }
+
+  function handleStageTouchStart(event: ReactTouchEvent<HTMLElement>) {
+    if (imageCount < 2) {
+      return
+    }
+
+    const firstTouch = event.changedTouches[0] ?? event.touches[0]
+
+    if (!firstTouch) {
+      return
+    }
+
+    if (
+      swipeGestureRef.current?.source === 'pointer' &&
+      swipeGestureRef.current.pointerId !== undefined &&
+      typeof event.currentTarget.releasePointerCapture === 'function'
+    ) {
+      try {
+        event.currentTarget.releasePointerCapture(swipeGestureRef.current.pointerId)
+      } catch {
+        // Ignore capture failures in browsers/environments that do not support it reliably.
+      }
+    }
+
+    swipeGestureRef.current = {
+      source: 'touch',
+      touchId: firstTouch.identifier,
+      startX: firstTouch.clientX,
+      startY: firstTouch.clientY,
+      hasTriggered: false,
+    }
+  }
+
+  function handleStageTouchEnd(event: ReactTouchEvent<HTMLElement>) {
+    const swipeGesture = swipeGestureRef.current
+
+    if (!swipeGesture || swipeGesture.source !== 'touch' || swipeGesture.touchId === undefined) {
+      return
+    }
+
+    const changedTouch =
+      getTouchByIdentifier(event.changedTouches, swipeGesture.touchId) ??
+      event.changedTouches[0]
+
+    resetSwipeGesture()
+
+    if (!changedTouch) {
+      return
+    }
+  }
+
+  function handleStageTouchMove(event: ReactTouchEvent<HTMLElement>) {
+    const swipeGesture = swipeGestureRef.current
+
+    if (!swipeGesture || swipeGesture.source !== 'touch' || swipeGesture.touchId === undefined) {
+      return
+    }
+
+    const currentTouch =
+      getTouchByIdentifier(event.changedTouches, swipeGesture.touchId) ??
+      getTouchByIdentifier(event.touches, swipeGesture.touchId)
+
+    if (!currentTouch) {
+      return
+    }
+
+    if (triggerSwipeIfNeeded(swipeGesture, currentTouch.clientX, currentTouch.clientY)) {
+      event.preventDefault()
+    }
+  }
+
+  return (
+    <div className="gallery-overlay" role="presentation" onClick={onClose}>
+      <section
+        aria-label={`${product.name} images`}
+        aria-modal="true"
+        className="gallery-modal"
+        role="dialog"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="gallery-modal__header">
+          <div>
+            <p className="eyebrow">Product Images</p>
+            <h2>{product.name}</h2>
+          </div>
+
+          <button
+            aria-label="Close image gallery"
+            className="gallery-close"
+            type="button"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <figure className="gallery-stage">
+          <div
+            className="gallery-stage__surface"
+            onPointerCancel={handleStagePointerCancel}
+            onPointerDown={handleStagePointerDown}
+            onPointerMove={handleStagePointerMove}
+            onPointerUp={handleStagePointerUp}
+            onTouchCancel={resetSwipeGesture}
+            onTouchMove={handleStageTouchMove}
+            onTouchEnd={handleStageTouchEnd}
+            onTouchStart={handleStageTouchStart}
+          >
+            <img
+              alt={`${product.name} image ${selectedImageIndex + 1}`}
+              className="gallery-stage__image"
+              draggable={false}
+              src={selectedImageUrl}
+            />
+          </div>
+        </figure>
+
+        <p className="gallery-counter">
+          {selectedImageIndex + 1} / {product.imageUrls.length}
+        </p>
+        {imageCount > 1 ? <p className="gallery-swipe-hint">Swipe or drag to browse</p> : null}
+
+        <div aria-label="Product image thumbnails" className="gallery-strip" role="list">
+          {product.imageUrls.map((imageUrl, imageIndex) => (
+            <button
+              key={`${product.sku}-${imageUrl}`}
+              aria-label={`Show image ${imageIndex + 1} of ${product.imageUrls.length}`}
+              aria-pressed={selectedImageIndex === imageIndex}
+              className={`gallery-thumb${selectedImageIndex === imageIndex ? ' gallery-thumb--selected' : ''}`}
+              type="button"
+              onClick={() => onSelectImage(imageIndex)}
+            >
+              <img
+                alt=""
+                className="gallery-thumb__image"
+                loading="lazy"
+                src={imageUrl}
+              />
+            </button>
+          ))}
+        </div>
+      </section>
+    </div>
+  )
+}
+
 function App() {
   const [products, setProducts] = useState(seedProducts)
   const [filters, setFilters] = useState(INITIAL_FILTERS)
@@ -128,6 +455,8 @@ function App() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0)
 
   const deferredNameQuery = useDeferredValue(filters.nameQuery)
   const deferredSkuQuery = useDeferredValue(filters.skuQuery)
@@ -171,6 +500,37 @@ function App() {
     }))
   }
 
+  function openGallery(product: Product, imageIndex = 0) {
+    setGalleryProduct(product)
+    setSelectedImageIndex(imageIndex)
+  }
+
+  function closeGallery() {
+    setGalleryProduct(null)
+    setSelectedImageIndex(0)
+  }
+
+  const handleGalleryEscape = useEffectEvent((event: KeyboardEvent) => {
+    if (event.key === 'Escape') {
+      closeGallery()
+    }
+  })
+
+  useEffect(() => {
+    if (!galleryProduct) {
+      return
+    }
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    window.addEventListener('keydown', handleGalleryEscape)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleGalleryEscape)
+    }
+  }, [galleryProduct])
+
   function clearFilters() {
     setFilters(INITIAL_FILTERS)
   }
@@ -181,6 +541,7 @@ function App() {
       setFilters(INITIAL_FILTERS)
       setCatalogSummary(SEED_SUMMARY)
     })
+    closeGallery()
     setErrorMessage(null)
     setFeedback('Restored the bundled seed snapshot.')
   }
@@ -229,9 +590,12 @@ function App() {
         setCatalogSummary(nextSummary)
       })
 
+      closeGallery()
       setFeedback(buildImportMessage(nextSummary))
     } catch {
-      setErrorMessage('The selected files could not be parsed. Please export the product list HTML again and retry.')
+      setErrorMessage(
+        'The selected files could not be parsed. Please export the product list HTML again and retry.',
+      )
     } finally {
       event.target.value = ''
     }
@@ -244,26 +608,26 @@ function App() {
           <p className="eyebrow">Minh &amp; Brothers Product Index</p>
           <h1>One catalog for every exported product page.</h1>
           <p className="hero-panel__lede">
-            Search by name or SKU, slice the list by Type, HS Name, or Category,
-            and reload future HTML exports without leaving the page.
+            Search by name or SKU, slice the list by Type, HS Name, or Category, and
+            reload future HTML exports without leaving the page.
           </p>
         </div>
 
-        <div className="hero-panel__stats" aria-label="Catalog summary">
+        <div aria-label="Catalog summary" className="hero-panel__stats">
           <StatCard
+            detail={`Filtered from ${products.length.toLocaleString('en-US')} loaded products`}
             label="Visible Products"
             value={filteredProducts.length.toLocaleString('en-US')}
-            detail={`Filtered from ${products.length.toLocaleString('en-US')} loaded products`}
           />
           <StatCard
+            detail={`${catalogSummary.fileCount} file${catalogSummary.fileCount === 1 ? '' : 's'} in the active snapshot`}
             label="Catalog Source"
             value={catalogSummary.fileCount.toString()}
-            detail={`${catalogSummary.fileCount} file${catalogSummary.fileCount === 1 ? '' : 's'} in the active snapshot`}
           />
           <StatCard
+            detail="Distinct Type, HS Name, and Category values"
             label="Open Facets"
             value={(typeOptions.length + hsNameOptions.length + categoryOptions.length).toString()}
-            detail="Distinct Type, HS Name, and Category values"
           />
         </div>
       </section>
@@ -285,9 +649,9 @@ function App() {
             Import HTML Files
           </label>
           <input
-            id="catalog-import"
             accept=".html,text/html"
             className="sr-only"
+            id="catalog-import"
             multiple
             type="file"
             onChange={handleImport}
@@ -302,22 +666,22 @@ function App() {
       </section>
 
       {(feedback || errorMessage || isPending) && (
-        <section className="status-row" aria-live="polite">
-          {isPending ? <p className="status-pill">Refreshing catalog…</p> : null}
+        <section aria-live="polite" className="status-row">
+          {isPending ? <p className="status-pill">Refreshing catalog...</p> : null}
           {feedback ? <p className="status-pill status-pill--success">{feedback}</p> : null}
           {errorMessage ? <p className="status-pill status-pill--error">{errorMessage}</p> : null}
         </section>
       )}
 
-      <section className="filters-panel" aria-label="Product filters">
+      <section aria-label="Product filters" className="filters-panel">
         <div className="filters-panel__header">
           <div>
             <p className="eyebrow">Filters</p>
             <h2>Refine the catalog in place.</h2>
           </div>
           <p className="filters-panel__hint">
-            Text filters use substring matching. Facets use exact matches and combine
-            together with AND logic.
+            Text filters use substring matching. Facets use exact matches and combine together
+            with AND logic.
           </p>
         </div>
 
@@ -370,7 +734,7 @@ function App() {
         </div>
       </section>
 
-      <section className="table-panel" aria-label="Filtered product results">
+      <section aria-label="Filtered product results" className="table-panel">
         <div className="table-panel__header">
           <div>
             <p className="eyebrow">Results</p>
@@ -405,21 +769,22 @@ function App() {
                 filteredProducts.map((product) => (
                   <tr key={product.sku} className="catalog-row">
                     <td>
-                      <a
+                      <button
+                        aria-haspopup="dialog"
+                        aria-label={`View images for ${product.name}`}
                         className="thumb-link"
-                        href={product.imageUrl}
-                        rel="noreferrer"
-                        target="_blank"
+                        type="button"
+                        onClick={() => openGallery(product)}
                       >
                         <img
                           alt={product.name}
                           className="product-thumb"
                           height={68}
                           loading="lazy"
-                          src={product.imageUrl}
+                          src={getPrimaryImageUrl(product)}
                           width={68}
                         />
-                      </a>
+                      </button>
                     </td>
                     <td className="product-table__name">{product.name}</td>
                     <td>
@@ -427,7 +792,7 @@ function App() {
                     </td>
                     <td>{product.type || UNASSIGNED_LABEL}</td>
                     <td>{product.hsName || UNASSIGNED_LABEL}</td>
-                    <td>{product.hsCode || '—'}</td>
+                    <td>{product.hsCode || '-'}</td>
                     <td>{product.category || UNASSIGNED_LABEL}</td>
                   </tr>
                 ))
@@ -436,6 +801,15 @@ function App() {
           </table>
         </div>
       </section>
+
+      {galleryProduct ? (
+        <ImageGallery
+          product={galleryProduct}
+          selectedImageIndex={selectedImageIndex}
+          onClose={closeGallery}
+          onSelectImage={setSelectedImageIndex}
+        />
+      ) : null}
     </main>
   )
 }
