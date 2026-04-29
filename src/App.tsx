@@ -1,15 +1,15 @@
 import {
+  type ChangeEvent,
   type Dispatch,
+  type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
+  type TouchEvent as ReactTouchEvent,
   useDeferredValue,
   useEffect,
   useEffectEvent,
   useRef,
-  type SetStateAction,
   useState,
   useTransition,
-  type ChangeEvent,
-  type PointerEvent as ReactPointerEvent,
-  type TouchEvent as ReactTouchEvent,
 } from 'react'
 import initialProducts from './data/products.initial.json'
 import './App.css'
@@ -24,6 +24,7 @@ const SEED_FILE_COUNT = 4
 const FACET_SIZE = 6
 const FALLBACK_IMAGE_URL = 'https://minhbros.com/upload/product/placeholder.jpg'
 const GALLERY_SWIPE_THRESHOLD_PX = 48
+const SCROLL_TOP_VISIBILITY_THRESHOLD_PX = 300
 
 const INITIAL_FILTERS: FilterState = {
   nameQuery: '',
@@ -97,12 +98,27 @@ function buildImportMessage(summary: CatalogSummary) {
   return `Imported ${summary.productCount} products from ${summary.fileCount} file${summary.fileCount === 1 ? '' : 's'} and skipped ${summary.invalidFiles.length} invalid file${summary.invalidFiles.length === 1 ? '' : 's'}.`
 }
 
+function clearAdvancedOnlyFilters(filters: FilterState): FilterState {
+  return {
+    ...filters,
+    nameQuery: '',
+    types: [],
+    hsNames: [],
+    categories: [],
+  }
+}
+
 function getPrimaryImageUrl(product: Product) {
   return product.imageUrls[0] ?? FALLBACK_IMAGE_URL
 }
 
 function isSwipePointer(pointerType: string) {
-  return pointerType === '' || pointerType === 'mouse' || pointerType === 'touch' || pointerType === 'pen'
+  return (
+    pointerType === '' ||
+    pointerType === 'mouse' ||
+    pointerType === 'touch' ||
+    pointerType === 'pen'
+  )
 }
 
 function getTouchByIdentifier(
@@ -245,6 +261,24 @@ function ImageGallery({
     }
   }
 
+  function handleStagePointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const swipeGesture = swipeGestureRef.current
+
+    if (
+      !swipeGesture ||
+      swipeGesture.source !== 'pointer' ||
+      swipeGesture.pointerId !== event.pointerId ||
+      !event.isPrimary ||
+      !isSwipePointer(event.pointerType)
+    ) {
+      return
+    }
+
+    if (triggerSwipeIfNeeded(swipeGesture, event.clientX, event.clientY)) {
+      event.preventDefault()
+    }
+  }
+
   function handleStagePointerUp(event: ReactPointerEvent<HTMLElement>) {
     const swipeGesture = swipeGestureRef.current
 
@@ -267,24 +301,6 @@ function ImageGallery({
     }
 
     resetSwipeGesture()
-  }
-
-  function handleStagePointerMove(event: ReactPointerEvent<HTMLElement>) {
-    const swipeGesture = swipeGestureRef.current
-
-    if (
-      !swipeGesture ||
-      swipeGesture.source !== 'pointer' ||
-      swipeGesture.pointerId !== event.pointerId ||
-      !event.isPrimary ||
-      !isSwipePointer(event.pointerType)
-    ) {
-      return
-    }
-
-    if (triggerSwipeIfNeeded(swipeGesture, event.clientX, event.clientY)) {
-      event.preventDefault()
-    }
   }
 
   function handleStagePointerCancel(event: ReactPointerEvent<HTMLElement>) {
@@ -335,24 +351,6 @@ function ImageGallery({
     }
   }
 
-  function handleStageTouchEnd(event: ReactTouchEvent<HTMLElement>) {
-    const swipeGesture = swipeGestureRef.current
-
-    if (!swipeGesture || swipeGesture.source !== 'touch' || swipeGesture.touchId === undefined) {
-      return
-    }
-
-    const changedTouch =
-      getTouchByIdentifier(event.changedTouches, swipeGesture.touchId) ??
-      event.changedTouches[0]
-
-    resetSwipeGesture()
-
-    if (!changedTouch) {
-      return
-    }
-  }
-
   function handleStageTouchMove(event: ReactTouchEvent<HTMLElement>) {
     const swipeGesture = swipeGestureRef.current
 
@@ -370,6 +368,24 @@ function ImageGallery({
 
     if (triggerSwipeIfNeeded(swipeGesture, currentTouch.clientX, currentTouch.clientY)) {
       event.preventDefault()
+    }
+  }
+
+  function handleStageTouchEnd(event: ReactTouchEvent<HTMLElement>) {
+    const swipeGesture = swipeGestureRef.current
+
+    if (!swipeGesture || swipeGesture.source !== 'touch' || swipeGesture.touchId === undefined) {
+      return
+    }
+
+    const changedTouch =
+      getTouchByIdentifier(event.changedTouches, swipeGesture.touchId) ??
+      event.changedTouches[0]
+
+    resetSwipeGesture()
+
+    if (!changedTouch) {
+      return
     }
   }
 
@@ -406,8 +422,8 @@ function ImageGallery({
             onPointerMove={handleStagePointerMove}
             onPointerUp={handleStagePointerUp}
             onTouchCancel={resetSwipeGesture}
-            onTouchMove={handleStageTouchMove}
             onTouchEnd={handleStageTouchEnd}
+            onTouchMove={handleStageTouchMove}
             onTouchStart={handleStageTouchStart}
           >
             <img
@@ -455,8 +471,11 @@ function App() {
   const [feedback, setFeedback] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isPending, startTransition] = useTransition()
+  const [isCatalogInfoExpanded, setIsCatalogInfoExpanded] = useState(false)
+  const [isAdvancedSearchExpanded, setIsAdvancedSearchExpanded] = useState(false)
   const [galleryProduct, setGalleryProduct] = useState<Product | null>(null)
   const [selectedImageIndex, setSelectedImageIndex] = useState(0)
+  const [isScrollTopButtonVisible, setIsScrollTopButtonVisible] = useState(false)
 
   const deferredNameQuery = useDeferredValue(filters.nameQuery)
   const deferredSkuQuery = useDeferredValue(filters.skuQuery)
@@ -468,6 +487,8 @@ function App() {
   const selectedTypes = new Set(filters.types)
   const selectedHsNames = new Set(filters.hsNames)
   const selectedCategories = new Set(filters.categories)
+  const isCompactTable = !isAdvancedSearchExpanded
+  const visibleTableColumnCount = isCompactTable ? 3 : 7
 
   const filteredProducts = products.filter((product) => {
     if (deferredNameQuery && !matchesText(product.name, deferredNameQuery)) {
@@ -529,10 +550,37 @@ function App() {
       document.body.style.overflow = previousOverflow
       window.removeEventListener('keydown', handleGalleryEscape)
     }
-  }, [galleryProduct])
+  }, [galleryProduct, handleGalleryEscape])
+
+  useEffect(() => {
+    function handleWindowScroll() {
+      setIsScrollTopButtonVisible(window.scrollY > SCROLL_TOP_VISIBILITY_THRESHOLD_PX)
+    }
+
+    handleWindowScroll()
+    window.addEventListener('scroll', handleWindowScroll, { passive: true })
+
+    return () => {
+      window.removeEventListener('scroll', handleWindowScroll)
+    }
+  }, [])
 
   function clearFilters() {
     setFilters(INITIAL_FILTERS)
+  }
+
+  function toggleAdvancedSearch() {
+    setIsAdvancedSearchExpanded((currentValue) => {
+      if (currentValue) {
+        setFilters((currentFilters) => clearAdvancedOnlyFilters(currentFilters))
+      }
+
+      return !currentValue
+    })
+  }
+
+  function scrollToTop() {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
   function restoreSeedData() {
@@ -601,68 +649,141 @@ function App() {
     }
   }
 
+  function renderCompactImageCell(product: Product) {
+    return (
+      <div className="thumb-stack">
+        {product.imageUrls.map((imageUrl, imageIndex) => (
+          <button
+            key={`${product.sku}-${imageUrl}`}
+            aria-haspopup="dialog"
+            aria-label={`View image ${imageIndex + 1} of ${product.imageUrls.length} for ${product.name}`}
+            className="thumb-link thumb-link--stack"
+            type="button"
+            onClick={() => openGallery(product, imageIndex)}
+          >
+            <img
+              alt={product.imageUrls.length === 1 ? product.name : `${product.name} image ${imageIndex + 1}`}
+              className="product-thumb product-thumb--compact"
+              height={52}
+              loading="lazy"
+              src={imageUrl}
+              width={52}
+            />
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  function renderAdvancedImageCell(product: Product) {
+    return (
+      <button
+        aria-haspopup="dialog"
+        aria-label={`View images for ${product.name}`}
+        className="thumb-link"
+        type="button"
+        onClick={() => openGallery(product)}
+      >
+        <img
+          alt={product.name}
+          className="product-thumb"
+          height={68}
+          loading="lazy"
+          src={getPrimaryImageUrl(product)}
+          width={68}
+        />
+      </button>
+    )
+  }
+
   return (
     <main className="catalog-shell">
-      <section className="hero-panel">
-        <div className="hero-panel__copy">
-          <p className="eyebrow">Minh &amp; Brothers Product Index</p>
-          <h1>One catalog for every exported product page.</h1>
-          <p className="hero-panel__lede">
-            Search by name or SKU, slice the list by Type, HS Name, or Category, and
-            reload future HTML exports without leaving the page.
-          </p>
-        </div>
+      <section className="catalog-disclosure">
+        <button
+          aria-controls="catalog-info-panel"
+          aria-expanded={isCatalogInfoExpanded}
+          className="disclosure-toggle"
+          type="button"
+          onClick={() => setIsCatalogInfoExpanded((currentValue) => !currentValue)}
+        >
+          <span className="disclosure-toggle__copy">
+            <span className="disclosure-toggle__eyebrow">Catalog Info</span>
+            <span className="disclosure-toggle__title">
+              {isCatalogInfoExpanded
+                ? 'Hide catalog summary and actions'
+                : 'Show catalog summary and actions'}
+            </span>
+          </span>
+          <span className="disclosure-toggle__state" aria-hidden="true">
+            {isCatalogInfoExpanded ? '-' : '+'}
+          </span>
+        </button>
 
-        <div aria-label="Catalog summary" className="hero-panel__stats">
-          <StatCard
-            detail={`Filtered from ${products.length.toLocaleString('en-US')} loaded products`}
-            label="Visible Products"
-            value={filteredProducts.length.toLocaleString('en-US')}
-          />
-          <StatCard
-            detail={`${catalogSummary.fileCount} file${catalogSummary.fileCount === 1 ? '' : 's'} in the active snapshot`}
-            label="Catalog Source"
-            value={catalogSummary.fileCount.toString()}
-          />
-          <StatCard
-            detail="Distinct Type, HS Name, and Category values"
-            label="Open Facets"
-            value={(typeOptions.length + hsNameOptions.length + categoryOptions.length).toString()}
-          />
-        </div>
-      </section>
+        {isCatalogInfoExpanded ? (
+          <div id="catalog-info-panel" className="catalog-disclosure__content">
+            <section className="hero-panel">
+              <div className="hero-panel__copy">
+                <p className="eyebrow">Minh &amp; Brothers Product Index</p>
+                <h1>One catalog for every exported product page.</h1>
+                <p className="hero-panel__lede">
+                  Search by name or SKU, slice the list by Type, HS Name, or Category, and
+                  reload future HTML exports without leaving the page.
+                </p>
+              </div>
 
-      <section className="toolbar-panel">
-        <div className="toolbar-panel__info">
-          <p className="toolbar-panel__title">Active catalog</p>
-          <p className="toolbar-panel__source">{catalogSummary.label}</p>
-          <p className="toolbar-panel__meta">
-            {catalogSummary.productCount.toLocaleString('en-US')} products
-            {catalogSummary.invalidFiles.length > 0
-              ? ` · ${catalogSummary.invalidFiles.length} skipped`
-              : ''}
-          </p>
-        </div>
+              <div aria-label="Catalog summary" className="hero-panel__stats">
+                <StatCard
+                  detail={`Filtered from ${products.length.toLocaleString('en-US')} loaded products`}
+                  label="Visible Products"
+                  value={filteredProducts.length.toLocaleString('en-US')}
+                />
+                <StatCard
+                  detail={`${catalogSummary.fileCount} file${catalogSummary.fileCount === 1 ? '' : 's'} in the active snapshot`}
+                  label="Catalog Source"
+                  value={catalogSummary.fileCount.toString()}
+                />
+                <StatCard
+                  detail="Distinct Type, HS Name, and Category values"
+                  label="Open Facets"
+                  value={(typeOptions.length + hsNameOptions.length + categoryOptions.length).toString()}
+                />
+              </div>
+            </section>
 
-        <div className="toolbar-panel__actions">
-          <label className="button button--primary" htmlFor="catalog-import">
-            Import HTML Files
-          </label>
-          <input
-            accept=".html,text/html"
-            className="sr-only"
-            id="catalog-import"
-            multiple
-            type="file"
-            onChange={handleImport}
-          />
-          <button className="button button--ghost" type="button" onClick={restoreSeedData}>
-            Reset to Seed Data
-          </button>
-          <button className="button button--ghost" type="button" onClick={clearFilters}>
-            Clear Filters
-          </button>
-        </div>
+            <section className="toolbar-panel">
+              <div className="toolbar-panel__info">
+                <p className="toolbar-panel__title">Active catalog</p>
+                <p className="toolbar-panel__source">{catalogSummary.label}</p>
+                <p className="toolbar-panel__meta">
+                  {catalogSummary.productCount.toLocaleString('en-US')} products
+                  {catalogSummary.invalidFiles.length > 0
+                    ? ` · ${catalogSummary.invalidFiles.length} skipped`
+                    : ''}
+                </p>
+              </div>
+
+              <div className="toolbar-panel__actions">
+                <label className="button button--primary" htmlFor="catalog-import">
+                  Import HTML Files
+                </label>
+                <input
+                  accept=".html,text/html"
+                  className="sr-only"
+                  id="catalog-import"
+                  multiple
+                  type="file"
+                  onChange={handleImport}
+                />
+                <button className="button button--ghost" type="button" onClick={restoreSeedData}>
+                  Reset to Seed Data
+                </button>
+                <button className="button button--ghost" type="button" onClick={clearFilters}>
+                  Clear Filters
+                </button>
+              </div>
+            </section>
+          </div>
+        ) : null}
       </section>
 
       {(feedback || errorMessage || isPending) && (
@@ -685,19 +806,8 @@ function App() {
           </p>
         </div>
 
-        <div className="filters-grid">
-          <label className="filter-field">
-            <span>Tên</span>
-            <input
-              name="nameQuery"
-              placeholder="Search by product name"
-              type="search"
-              value={filters.nameQuery}
-              onChange={(event) => updateFilter('nameQuery', event.target.value)}
-            />
-          </label>
-
-          <label className="filter-field">
+        <div className="filters-panel__controls">
+          <label className="filter-field filter-field--basic filter-field--inline">
             <span>SKU</span>
             <input
               name="skuQuery"
@@ -708,30 +818,57 @@ function App() {
             />
           </label>
 
-          <FacetField
-            label="Type"
-            name="types"
-            options={typeOptions}
-            selected={filters.types}
-            onChange={(name, values) => updateFilter(name, values)}
-          />
-
-          <FacetField
-            label="HS Name"
-            name="hsNames"
-            options={hsNameOptions}
-            selected={filters.hsNames}
-            onChange={(name, values) => updateFilter(name, values)}
-          />
-
-          <FacetField
-            label="Category"
-            name="categories"
-            options={categoryOptions}
-            selected={filters.categories}
-            onChange={(name, values) => updateFilter(name, values)}
-          />
+          <button
+            aria-controls="advanced-search-panel"
+            aria-expanded={isAdvancedSearchExpanded}
+            className="button button--ghost filters-panel__toggle"
+            type="button"
+            onClick={toggleAdvancedSearch}
+          >
+            {isAdvancedSearchExpanded ? 'Hide Advanced Search' : 'Show Advanced Search'}
+          </button>
         </div>
+
+        {isAdvancedSearchExpanded ? (
+          <div id="advanced-search-panel" className="filters-panel__advanced">
+            <div className="filters-grid filters-grid--advanced">
+              <label className="filter-field">
+                <span>Tên</span>
+                <input
+                  name="nameQuery"
+                  placeholder="Search by product name"
+                  type="search"
+                  value={filters.nameQuery}
+                  onChange={(event) => updateFilter('nameQuery', event.target.value)}
+                />
+              </label>
+
+              <FacetField
+                label="Type"
+                name="types"
+                options={typeOptions}
+                selected={filters.types}
+                onChange={(name, values) => updateFilter(name, values)}
+              />
+
+              <FacetField
+                label="HS Name"
+                name="hsNames"
+                options={hsNameOptions}
+                selected={filters.hsNames}
+                onChange={(name, values) => updateFilter(name, values)}
+              />
+
+              <FacetField
+                label="Category"
+                name="categories"
+                options={categoryOptions}
+                selected={filters.categories}
+                onChange={(name, values) => updateFilter(name, values)}
+              />
+            </div>
+          </div>
+        ) : null}
       </section>
 
       <section aria-label="Filtered product results" className="table-panel">
@@ -746,22 +883,28 @@ function App() {
         </div>
 
         <div className="table-scroll">
-          <table className="product-table">
+          <table
+            className={`product-table${isCompactTable ? ' product-table--compact' : ' product-table--advanced'}`}
+          >
             <thead>
               <tr>
                 <th scope="col">Image</th>
-                <th scope="col">Tên</th>
                 <th scope="col">SKU</th>
-                <th scope="col">Type</th>
-                <th scope="col">HS Name</th>
-                <th scope="col">HS Code</th>
-                <th scope="col">Category</th>
+                <th scope="col">Tên</th>
+                {!isCompactTable ? (
+                  <>
+                    <th scope="col">Type</th>
+                    <th scope="col">HS Name</th>
+                    <th scope="col">HS Code</th>
+                    <th scope="col">Category</th>
+                  </>
+                ) : null}
               </tr>
             </thead>
             <tbody>
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td className="product-table__empty" colSpan={7}>
+                  <td className="product-table__empty" colSpan={visibleTableColumnCount}>
                     No products match the current filters.
                   </td>
                 </tr>
@@ -769,31 +912,22 @@ function App() {
                 filteredProducts.map((product) => (
                   <tr key={product.sku} className="catalog-row">
                     <td>
-                      <button
-                        aria-haspopup="dialog"
-                        aria-label={`View images for ${product.name}`}
-                        className="thumb-link"
-                        type="button"
-                        onClick={() => openGallery(product)}
-                      >
-                        <img
-                          alt={product.name}
-                          className="product-thumb"
-                          height={68}
-                          loading="lazy"
-                          src={getPrimaryImageUrl(product)}
-                          width={68}
-                        />
-                      </button>
+                      {isCompactTable
+                        ? renderCompactImageCell(product)
+                        : renderAdvancedImageCell(product)}
                     </td>
-                    <td className="product-table__name">{product.name}</td>
-                    <td>
+                    <td className="product-table__sku">
                       <code>{product.sku}</code>
                     </td>
-                    <td>{product.type || UNASSIGNED_LABEL}</td>
-                    <td>{product.hsName || UNASSIGNED_LABEL}</td>
-                    <td>{product.hsCode || '-'}</td>
-                    <td>{product.category || UNASSIGNED_LABEL}</td>
+                    <td className="product-table__name">{product.name}</td>
+                    {!isCompactTable ? (
+                      <>
+                        <td>{product.type || UNASSIGNED_LABEL}</td>
+                        <td>{product.hsName || UNASSIGNED_LABEL}</td>
+                        <td>{product.hsCode || '-'}</td>
+                        <td>{product.category || UNASSIGNED_LABEL}</td>
+                      </>
+                    ) : null}
                   </tr>
                 ))
               )}
@@ -801,6 +935,17 @@ function App() {
           </table>
         </div>
       </section>
+
+      {isScrollTopButtonVisible ? (
+        <button
+          aria-label="Scroll to top"
+          className="scroll-top-button"
+          type="button"
+          onClick={scrollToTop}
+        >
+          Top
+        </button>
+      ) : null}
 
       {galleryProduct ? (
         <ImageGallery
